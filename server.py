@@ -59,6 +59,18 @@ def root():
     print(request)
     return jsonify({'messages': "root"}), 200
 
+def is_greenish(pixel):
+    r, g, b = pixel
+    return (60 <= r <= 90 and 
+            100 <= g <= 120 and 
+            60 <= b <= 90)
+
+def is_blueish(pixel):
+    r, g, b = pixel
+    return (30 <= r <= 60 and 
+            60 <= g <= 130 and 
+            90 <= b <= 250)
+
     
 def check_imessage(phone_number):
     # Clean and format the phone number
@@ -124,21 +136,6 @@ def check_imessage(phone_number):
                 
                 if os.path.exists(screenshot_path):
                     print(f"Screenshot created successfully")
-
-                    IMESSAGE_BLUE = (0, 122, 255)
-                    SMS_GREEN = (35, 151, 63)
-
-                    def is_greenish(pixel):
-                        r, g, b = pixel
-                        return (60 <= r <= 90 and 
-                                100 <= g <= 120 and 
-                                60 <= b <= 90)
-                    
-                    def is_blueish(pixel):
-                        r, g, b = pixel
-                        return (30 <= r <= 60 and 
-                                60 <= g <= 130 and 
-                                90 <= b <= 250)
                     
                     with Image.open(screenshot_path) as img:
                         img = img.convert('RGB')
@@ -216,18 +213,6 @@ def check_imessage(phone_number):
         traceback.print_exc()
         return False
 
-def is_color_similar(color1, color2, threshold=30):
-    """Check if two colors are similar within a threshold."""
-    r1, g1, b1 = color1
-    r2, g2, b2 = color2
-    
-    # iMessage blue is approximately (0, 122, 255)
-    # SMS green is approximately (35, 151, 63)
-    
-    return (abs(r1 - r2) <= threshold and 
-            abs(g1 - g2) <= threshold and 
-            abs(b1 - b2) <= threshold)
-
 @app.route('/check_imessage/<phone_number>')
 def check_imessage_route(phone_number):
     try:
@@ -247,6 +232,307 @@ def check_imessage_route(phone_number):
         print(f"Error in route handler: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+@app.route('/logout_imessage', methods=['POST'])
+def logout_imessage():
+    try:
+        logout_script = '''
+        tell application "Messages"
+            activate
+        end tell
+        
+        tell application "System Events"
+            tell process "Messages"
+                -- Open Preferences
+                keystroke "," using command down
+                delay 0.3
+                
+                -- Click on iMessage tab
+                click button "iMessage" of toolbar 1 of window 1
+                delay 0.3
+                
+                -- Try to find the Sign Out button by its UI element description
+                set foundButton to false
+                
+                -- Get all UI elements in the window
+                set allElements to entire contents of window 1
+                
+                -- Loop through all elements looking for the Sign Out button
+                repeat with anElement in allElements
+                    try
+                        if name of anElement is "Sign Out" then
+                            click anElement
+                            set foundButton to true
+                            delay 0.3
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                
+                -- If we couldn't find it by name, try by class and position
+                if not foundButton then
+                    -- Get all buttons
+                    set allButtons to buttons of window 1
+                    
+                    -- Look for buttons in the top right area
+                    repeat with aButton in allButtons
+                        try
+                            set btnPos to position of aButton
+                            
+                            -- Check if this looks like our Sign Out button (in top right)
+                            if (item 1 of btnPos) > 700 and (item 2 of btnPos) < 350 then
+                                click aButton
+                                set foundButton to true
+                                delay 0.3
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end if
+                
+                -- If still not found, try a direct click at the position from the screenshot
+                if not foundButton then
+                    -- Based on your screenshot, try clicking at this position
+                    click at {813, 305}
+                    delay 0.3
+                end if
+                
+                -- Try to confirm Sign Out if dialog appears
+                try
+                    click button "Sign Out" of sheet 1 of window 1
+                    delay 0.2
+                end try
+                
+                -- Close preferences window
+                keystroke "w" using command down
+            end tell
+        end tell
+        
+        return "Logout successful"
+        '''
+        
+        result = subprocess.run(['osascript', '-e', logout_script], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return jsonify({
+                'success': True, 
+                'message': 'Successfully logged out of iMessage'
+            })
+        else:
+            return jsonify({
+                'success': False, 
+                'error': result.stderr
+            }), 500
+            
+    except Exception as e:
+        print(f"Error logging out of iMessage: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/login_imessage', methods=['POST'])
+def login_imessage():
+    try:
+        data = request.json
+        if not data or 'apple_id' not in data or 'password' not in data:
+            return jsonify({'success': False, 'error': 'Apple ID and password are required'}), 400
+            
+        apple_id = data['apple_id']
+        password = data['password']
+        
+        login_script = f'''
+        tell application "Messages"
+            activate
+        end tell
+        
+        delay 0.5
+        
+        tell application "System Events"
+            tell process "Messages"
+                -- First screen: Enter Apple ID
+                try
+                    -- Clear any existing text in the first field (Apple ID)
+                    set value of text field 1 of window 1 to ""
+                    delay 0.1
+                    set value of text field 1 of window 1 to "{apple_id}"
+                    delay 0.1
+                on error
+                    -- If setting value directly fails, try keystroke
+                    keystroke "a" using {{command down}}
+                    keystroke "{apple_id}"
+                    delay 0.1
+                end try
+                
+                -- Click Next/Continue button or press return
+                try
+                    click button "Sign In" of window 1
+                on error
+                    try
+                        click button "Next" of window 1
+                    on error
+                        try
+                            click button "Continue" of window 1
+                        on error
+                            keystroke return
+                        end try
+                    end try
+                end try
+                
+                -- Wait for second screen
+                delay 1
+                
+                -- Second screen: Enter Apple ID again and password
+                -- First make sure we're in the first field (Apple ID)
+                click text field 1 of window 1
+                delay 0.1
+                
+                -- Clear and enter Apple ID again
+                keystroke "a" using {{command down}}
+                keystroke (ASCII character 8) -- backspace
+                delay 0.1
+                keystroke "{apple_id}"
+                delay 0.1
+                
+                -- Explicitly click the password field
+                try
+                    click text field 2 of window 1
+                on error
+                    -- If clicking fails, try tabbing
+                    keystroke tab
+                end try
+                
+                delay 0.1
+                
+                -- Clear any existing text in password field
+                keystroke "a" using {{command down}}
+                keystroke (ASCII character 8) -- backspace
+                delay 0.1
+                
+                -- Type password character by character
+                set pwd to "{password}"
+                repeat with i from 1 to length of pwd
+                    set c to character i of pwd
+                    keystroke c
+                    delay 0.05 -- Small delay between characters
+                end repeat
+                
+                delay 0.1
+                
+                -- Click Sign In button in bottom right
+                try
+                    click button "Sign In" of window 1
+                on error
+                    -- If button click fails, try tab + return to reach the button
+                    keystroke tab
+                    keystroke tab
+                    keystroke return
+                end try
+                
+                return "Login initiated"
+            end tell
+        end tell
+        '''
+        
+        result = subprocess.run(['osascript', '-e', login_script], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return jsonify({
+                'success': True, 
+                'message': 'Login initiated, now call /click_other_options'
+            })
+        else:
+            return jsonify({'success': False, 'error': result.stderr}), 500
+            
+    except Exception as e:
+        print(f"Error logging into iMessage: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/click_other_options_tab', methods=['POST'])
+def click_other_options_tab():
+    try:
+        # This script uses tab navigation to reach the "Other options" button
+        
+        tab_script = '''
+        tell application "Messages"
+            activate
+        end tell
+        
+        -- Wait for Messages to come to the foreground
+        delay 1
+        
+        -- Take a screenshot before we start
+        do shell script "screencapture -x /tmp/before_tab.png"
+        
+        tell application "System Events"
+            tell process "Messages"
+                -- Get the window position and size for screenshots
+                set winPosition to position of window 1
+                set winSize to size of window 1
+                set winLeft to item 1 of winPosition
+                set winTop to item 2 of winPosition
+                set winWidth to item 1 of winSize
+                set winHeight to item 2 of winSize
+                
+                -- Press tab twice to navigate to the "Other options" button
+                -- First tab should go to "Learn more..."
+                -- Second tab should go to "Other options"
+                keystroke tab
+                delay 0.5
+                keystroke tab
+                delay 0.5
+                
+                -- Take a screenshot after tabbing
+                do shell script "screencapture -x -R" & winLeft & "," & winTop & "," & winWidth & "," & winHeight & " /tmp/after_tab.png"
+                
+                -- Press return/enter to click the button
+                keystroke return
+                
+                -- Wait for any UI changes
+                delay 1
+                
+                -- Take a screenshot after clicking
+                do shell script "screencapture -x -R" & winLeft & "," & winTop & "," & winWidth & "," & winHeight & " /tmp/after_click_tab.png"
+                
+                -- Check if we now have a verification code field
+                set success to false
+                try
+                    if exists text field 1 of window 1 then
+                        set fieldValue to value of attribute "AXPlaceholderValue" of text field 1 of window 1
+                        if fieldValue contains "code" or fieldValue contains "verification" then
+                            set success to true
+                        end if
+                    end if
+                on error
+                    -- Not a verification code screen
+                end try
+                
+                -- Press Escape to dismiss any remaining dialogs
+                delay 2
+                key code 53
+                delay 0.5
+
+                return success
+            end tell
+        end tell
+        '''
+        
+        result = subprocess.run(['osascript', '-e', tab_script], 
+                               capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            success = result.stdout.strip().lower() == "true"
+            
+            return jsonify({
+                'success': True,
+                'verification_screen_reached': success,
+            })
+        else:
+            return jsonify({'success': False, 'error': result.stderr}), 500
+            
+    except Exception as e:
+        print(f"Error with tab navigation: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("Registered routes:")
